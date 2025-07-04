@@ -1,3 +1,10 @@
+# LM dependencies
+svg.py
+numpy
+matplotlib
+pandas
+
+
 # Core modules (mandatory)
 jupyterlite-core==0.6.3
 jupyterlab~=4.4.3
