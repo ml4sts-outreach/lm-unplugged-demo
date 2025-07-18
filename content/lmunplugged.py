@@ -1,4 +1,4 @@
-# from svg import SVG, Polygon, Rect, Circle, ViewBoxSpec,Path
+ # from svg import SVG, Polygon, Rect, Circle, ViewBoxSpec,Path
 import svg
 from random import random, shuffle
 from numpy import linspace
@@ -6,6 +6,7 @@ from  matplotlib._color_data import XKCD_COLORS
 from random import choice
 import pandas as pd
 from IPython.display import SVG as ipySVG
+from collections import Counter
 
 
 def resolve_color(color):
@@ -181,13 +182,25 @@ class TrainDemo(ImgObj):
 
     def train_next(self):
         self.cur_step += 1
+        
         if self.cur_step >=len(self.doc.words):
-            self.cur_step = 1
-
-        return self.train_step(self.cur_step)
+            return self.reset_training()
+        else:
+            return self.train_step(self.cur_step)
     
     def reset_training(self):
+        self.active_paths = []
+        prev = self.doc.get_word(self.cur_step-2)
+        
+        prev.set_highlight('normal')
+        cur = self.doc.get_word(self.cur_step-1)
+        cur.set_highlight('normal')
+
+        target_bin = self.table.bins[prev.name]
+        target_bin.set_highlight('normal')
+
         self.cur_step = 0
+        return self
         
 
 class Connector(ImgObj):
@@ -242,10 +255,14 @@ class Table(ImgObj):
 
         bin_list = []
         for bin_color in df.index:
-            ball_colors = [ci for col,ct in df.loc['purple'].to_dict().items() for ci in [col]*ct]
+            ball_colors = [ci for col,ct in df.loc[bin_color].to_dict().items() for ci in [col]*ct]
             shuffle(ball_colors)
             cur_contents = [Ball(ci) for ci in ball_colors]
-            bin_list.append(Bin(bin_color,contents=cur_contents))
+            # make labelgroup or label
+            if isinstance(df.index,pd.MultiIndex):
+                bin_list.append(Bin(list(bin_color),contents=cur_contents))
+            else:
+                bin_list.append(Bin(bin_color,contents=cur_contents))
 
         return cls(bin_list)
 
@@ -257,6 +274,14 @@ class Table(ImgObj):
         self.placement_loc = self.location +container_loc
         # print('rendering bins relative to table ',self.placement_loc)
         return  [ei for bin in self.bins.values() for ei in bin.get_elements(self.placement_loc)]
+    
+    def get_df(self):
+        bin_names = list(self.bins.keys())
+        bin_stickies = [b for b in bin_names]
+        
+        bin_series = [bin.get_series() for _, bin in self.bins.items()]
+        
+        return pd.DataFrame(data=bin_series, index= bin_stickies)
     
     def get_min_dims(self):
         container_adjust = self.placement_loc - self.location
@@ -301,16 +326,20 @@ class Bin(ImgObj):
                         'focus':4}
     def __init__(self,color,left_x=0,top_y=0,contents=None,highlight='normal'):
         # Define dimensions and central positions for bin components
-        self.color = resolve_color(color)
+        
         self.highlight = highlight
         if isinstance(color,list):
             self.n_labels = len(color)
             self.name = '-'.join(color)
+            self.label = LabelGroup([Label(c) for c in color])
         else:
             self.n_labels = 1
             self.name = color
+            self.label = Label(color)
 
-        self.label = Label(self.color)
+            # self.color = resolve_color(color)
+
+        
         self.location = Coordinate(left_x,top_y)
         self.placement_loc = self.location
         self.base_points = PointList([(0,0), (Bin.bin_bottom_offset, Bin.bin_h), 
@@ -328,6 +357,11 @@ class Bin(ImgObj):
         
     def get_anchor(self):
         return self.placement_loc + Coordinate(self.bin_w_top/2,0)
+    
+    def get_series(self):
+        # count the contents
+        ball_colors = [ball.name for ball in self.contents]
+        return pd.Series(Counter(ball_colors))
 
     def set_focus(self):
         self.highlight = 'focus'
@@ -449,7 +483,8 @@ class DocCollection(ImgObj):
         # calculate, probably align vertically
         return Coordinate(0,0)
 
-class Doc(ImgObj):
+
+class StickyContainer(ImgObj):
     sticky_width = 100
     sticky_height = 60
     def __init__(self, sticky_list,word_spacing=10,left =0,top=0,
@@ -543,6 +578,10 @@ class Doc(ImgObj):
             return Coordinate((cur_word_num)*(self.sticky_width+self.word_spacing),0)
     
 
+class Doc(StickyContainer):
+    sticky_width = 100
+    sticky_height = 60
+
 
 
 class Word:
@@ -616,6 +655,10 @@ class Sticky(ImgObj):
                       stroke_width=self.stroke_width_highlight[highlight])
         
         return [sticky] 
+    
+    def __str__(self):
+        
+        return self.get_elements()[0].as_str()
 
 class Label(Sticky):
     # TODO: implement label and use it for bins
@@ -623,10 +666,13 @@ class Label(Sticky):
         super().__init__(color, left_x, top_y, width, height)
 
 
-class LabelGroup(ImgObj):
+class LabelGroup(StickyContainer):
+
+    sticky_width = Bin.sticky_width
+    sticky_height = Bin.sticky_height
     # TODO: implement labelgroup to hold two labls and allow for bins to be created for longer context windows
-    def __init__(self):
-        super().__init__()
+    def __init__(self, labels):
+        super().__init__(labels)
 
 class Ball(ImgObj):
     # TODO: implement ball highlights (follow  sticky and bin as examples)
