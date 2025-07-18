@@ -126,25 +126,22 @@ class ImgObj:
         pass
 
 
-class GenerateDemo(ImgObj):
-    # TODO: implement a demo object, make parallel to the train demo, but for generating documents, use ball highlighting
-    def __init__(self,table,doc_collection):
-        table.set_location(Coordinate(0,0))
-        self.table = table
-        self.doc_collection = doc_collection
-
 
 
 class TrainDemo(ImgObj):
     def __init__(self, table,doc,left=0,top=0):
         self.doc = doc
         _,doc_height = doc.get_min_dims()
-
         table.set_location(Coordinate(0,doc_height+100))
         self.table = table
+
+        # set doc context from table context
+        self.doc.set_context(table.context_len)
+
+        
         self.active_paths = []
         self.location = Coordinate(left,top)
-        self.cur_step = 0
+        self.cur_step = self.doc.context_len-1
 
     def get_elements(self):
         constant_elems = self.doc.get_elements(self.location) + self.table.get_elements(self.location)
@@ -158,31 +155,37 @@ class TrainDemo(ImgObj):
         return item_far_pts.get_min_dims()
 
     def train_step(self,word_index):
-        # unlightlight others
+        # unlightlight all before starting
         for word in self.doc.words:
             word.set_highlight('normal')
 
         for cur_bin in self.table.bins.values():
             cur_bin.set_highlight('normal')
+            for ball in cur_bin.contents:
+                ball.set_highlight('normal')
         
         # identify active words
-        prev = self.doc.get_word(word_index-1)
-        prev.set_highlight('previous')
+              
+        prev = self.doc.get_context(word_index)
+        [previ.set_highlight('previous') for previ in prev]
         cur = self.doc.get_word(word_index)
         cur.set_highlight('focus')
         
-        # figure out bin
-        self.table.add_ball(prev.name,Ball(cur.name))
-        target_bin = self.table.bins[prev.name]
+        # add ball to bin and highlight them
+        
+        target_bin_name = '-'.join([p.name for p in prev])
+        self.table.add_ball(target_bin_name,Ball(cur.name))
+        target_bin = self.table.bins[target_bin_name]
         target_bin.set_highlight('focus')
+        target_bin.contents[-1].set_highlight('focus')
 
-        # add paths
-        self.active_paths = [Connector(prev,target_bin,heavy=False),Connector(cur,target_bin.contents[-1])]
+        # add paths, just connect last word incontext window, both will be higlighted
+        prev_paths = [Connector(word,label,heavy=False) for word,label in zip(prev,target_bin.label.words)]
+        self.active_paths = prev_paths + [Connector(cur,target_bin.contents[-1])]
         return self
 
     def train_next(self):
         self.cur_step += 1
-        
         if self.cur_step >=len(self.doc.words):
             return self.reset_training()
         else:
@@ -190,18 +193,104 @@ class TrainDemo(ImgObj):
     
     def reset_training(self):
         self.active_paths = []
-        prev = self.doc.get_word(self.cur_step-2)
-        
-        prev.set_highlight('normal')
-        cur = self.doc.get_word(self.cur_step-1)
-        cur.set_highlight('normal')
+        for word in self.doc.words:
+            word.set_highlight('normal')
 
-        target_bin = self.table.bins[prev.name]
-        target_bin.set_highlight('normal')
+        for cur_bin in self.table.bins.values():
+            cur_bin.set_highlight('normal')
+            for ball in cur_bin.contents:
+                ball.set_highlight('normal')
 
-        self.cur_step = 0
+        self.cur_step = self.doc.context_len-1
         return self
         
+
+
+class SampleDemo(ImgObj):
+    def __init__(self, table,doc,left=0,top=0):
+
+        self.doc = doc
+        _,doc_height = doc.get_min_dims()
+
+        table.set_location(Coordinate(0,doc_height+100))
+        self.table = table
+        _,table_height = table.get_min_dims()
+
+        # TODO: add collection and make it possible to sample multiple documents in a row
+        self.active_paths = []
+        self.location = Coordinate(left,top)
+        self.cur_step = 0
+        self.doc.set_context(table.context_len)
+
+    def get_elements(self):
+        constant_elems = self.doc.get_elements(self.location) + self.table.get_elements(self.location)
+        # compute the paths after moving everything else
+
+        path_elems = [ap.get_elements() for ap in self.active_paths]
+        return constant_elems + path_elems
+    
+    def get_min_dims(self):
+        item_far_pts = PointList([self.table.get_min_dims(),self.doc.get_min_dims()])
+        return item_far_pts.get_min_dims()
+
+    def sample_step(self):
+        # always reset by unhiglighting and removing paths
+        for word in self.doc.words:
+            word.set_highlight('normal')
+
+        for cur_bin in self.table.bins.values():
+            cur_bin.set_highlight('normal')
+            for ball in cur_bin.contents:
+                ball.set_highlight('normal')
+
+        
+        self.active_paths = []
+        
+        
+        last_word = self.doc.words[-1]
+        # keep sampling as long as the last word is not white
+        if not(last_word.name == 'white'):
+
+            context = self.doc.get_context(-1)
+            target_bin_name = '-'.join([p.name for p in context])
+            target_bin = self.table.bins[target_bin_name]
+            
+            target_bin.set_highlight('previous')
+
+            # sample new word
+            sampled_ball = target_bin.sample(return_object=True)
+            sampled_ball.set_highlight('focus')
+            self.doc.add_word(sampled_ball.name)
+            new_word = self.doc.words[-1]
+
+        
+            # identify active words
+            
+            [previ.set_highlight('previous') for previ in context]
+            # self.doc.add_word(new_word)
+            new_word.set_highlight('focus')
+        
+        
+
+            # add paths
+            prev_paths = [Connector(word,label,heavy=False) for word,label in 
+                          zip(context,target_bin.label.words)]
+            self.active_paths = prev_paths + [Connector(sampled_ball,new_word)]
+        return self
+
+    
+    def reset_sampling(self):
+        self.active_paths = []
+        for word in self.doc.words:
+            word.set_highlight('normal')
+
+        for cur_bin in self.table.bins.values():
+            cur_bin.set_highlight('normal')
+            for ball in cur_bin.contents:
+                ball.set_highlight('normal')
+
+        return self
+
 
 class Connector(ImgObj):
     def __init__(self,source,target,heavy=True):
@@ -217,8 +306,8 @@ class Connector(ImgObj):
         all objects 
         '''
         # self.placement_loc = self.location + container_loc
-        src = self.source.get_anchor()
-        tgt = self.target.get_anchor()
+        src = self.source.get_anchor(type='bottom')
+        tgt = self.target.get_anchor(type='top')
         
 
         path = svg.Path(d=[svg.M(src.x,src.y),svg.L(tgt.x,tgt.y)],stroke_width=4,stroke=self.color)
@@ -226,45 +315,72 @@ class Connector(ImgObj):
         
 
 class Table(ImgObj):
-    def __init__(self, bin_list,bin_spacing=5,bin_tops=0,bin_left=0):
+    def __init__(self, bin_list,bin_spacing=10,bin_tops=0,bin_left=0,max_width_bins=None):
         '''
         '''
-        self.bins ={cur_bin.name:cur_bin for cur_bin in bin_list} 
+        self.bins ={cur_bin.name:cur_bin for cur_bin in bin_list}
+        # TODO: valdate that all have the same number of labels 
+        bin_names = list(self.bins.keys())
+        self.context_len = len(bin_names[0].split('-'))
         # move bins so that they do not overlap
         self.num_bins = len(bin_list)
         self.bin_spacing = bin_spacing
         self.bin_tops = bin_tops
         self.location = Coordinate(bin_left,bin_tops)
         self.placement_loc = self.location
-        bin_locations = [Coordinate(x*(Bin.bin_w_top+self.bin_spacing),0) 
-                                                        for x in range(self.num_bins)]
         
-        for cur_bin, cur_loc in zip(self.bins.values(),bin_locations):
-            cur_bin.set_location(cur_loc)
+        if max_width_bins:
+            self.bin_wrap = True
+            self.bins_per_row = max_width_bins
+        else:
+            self.bin_wrap = False
+
+        # bin_locations = [Coordinate(x*(bin_w_top+self.bin_spacing),0) 
+        #                                                 for x in range(self.num_bins)]
+        
+        for i,cur_bin in enumerate(self.bins.values()):
+            cur_bin.set_location(self.get_bin_loc_by_index(i))
+            
 
     @classmethod
-    def from_list(cls, color_list):
+    def from_list(cls, color_list,max_width_bins=None):
         bin_list = [Bin(c) for c in color_list]
-        return cls(bin_list)
+        return cls(bin_list,max_width_bins=max_width_bins)
                  
     @classmethod
-    def from_csv(cls, csv_file_name):
+    def from_csv(cls, csv_file_name,max_width_bins=None,bin_size='small'):
         '''
+        create table from csv file with previous as index and possible next as columns
+        index columns should have no column names for context >1 we need a multiindex
+        counts may be scaled if too many balls to visualize
         '''
-        df = pd.read_csv(csv_file_name,index_col=0)
+        df = pd.read_csv(csv_file_name)
+        un = [c for c in df.columns if 'unnamed' in c.lower()]
+        df = df.set_index(un)
+        max_balls_per_bin = len(Bin('white',bin_size=bin_size).coordinates)
 
         bin_list = []
         for bin_color in df.index:
-            ball_colors = [ci for col,ct in df.loc[bin_color].to_dict().items() for ci in [col]*ct]
+            ball_counts = df.loc[bin_color].to_dict().items()
+            bc_sum = df.loc[bin_color].sum()
+            if bc_sum >= max_balls_per_bin:
+                
+                # if more balls than can fit, scale down
+                scale_factor = .8*max_balls_per_bin/df.loc[bin_color].sum()
+                ball_counts = [(col,round(ct*scale_factor)) for col,ct in ball_counts]
+                
+                
+            ball_colors = [ci for col,ct in ball_counts for ci in [col]*ct]
             shuffle(ball_colors)
             cur_contents = [Ball(ci) for ci in ball_colors]
+            
             # make labelgroup or label
             if isinstance(df.index,pd.MultiIndex):
-                bin_list.append(Bin(list(bin_color),contents=cur_contents))
-            else:
-                bin_list.append(Bin(bin_color,contents=cur_contents))
+                bin_color = list(bin_color)
+                
+            bin_list.append(Bin(bin_color,contents=cur_contents,bin_size=bin_size))
 
-        return cls(bin_list)
+        return cls(bin_list,max_width_bins=max_width_bins)
 
     def set_location(self,new_location,):
         self.location =new_location
@@ -292,28 +408,53 @@ class Table(ImgObj):
         self.bins[bin_name].add_ball(ball)
         return self.bins[bin_name].contents[-1]
     
-    def sample_bin(self,name):
+    def sample_bin(self,name,return_object=False):
         
-        return self.bins[name].sample()
+        return self.bins[name].sample(return_object=return_object)
 
-    def sample_doc(self,prompt):
-        sampled_doc = Doc.from_list([prompt],max_width_words=5)
-        last_word = prompt
+    def sample_doc(self,prompt,max_width_words=5):
+        if not isinstance(prompt,list):
+            prompt = [prompt]
+
+        sampled_doc = Doc.from_list(prompt,max_width_words=max_width_words,
+                                    context_len=self.context_len)
+        
+        last_word = prompt[-1]
         while not(last_word =='white'):
-            sampled_word = self.sample_bin(last_word)
+            context = sampled_doc.get_context(-1)
+            bin_name = '-'.join([c.name for c in context])
+            sampled_word = self.sample_bin(bin_name)
             
             sampled_doc.add_word(sampled_word)
             last_word = sampled_word
 
         return sampled_doc
     
+    def get_bin_loc_by_index(self,cur_bin_num):
+        bin_w_top = max([b.bin_w_top for b in self.bins.values()])
+        bin_h = max([b.bin_h for b in self.bins.values()])
+        if self.bin_wrap:
+            row = cur_bin_num//self.bins_per_row
+            position_in_row = cur_bin_num%self.bins_per_row
+            return Coordinate(position_in_row*(bin_w_top+self.bin_spacing),
+                              row*(bin_h+self.bin_spacing))
+        else:
+            # jsut wide foreverrrrrr
+            return Coordinate((cur_bin_num)*(bin_w_top+self.bin_spacing),0)
     
+small_bin_size = {'bin_w_top':140,
+    'bin_bottom_offset' :35,
+    'bin_h' : 160}    
+
+large_bin_size = {'bin_w_top':180,
+    'bin_bottom_offset' :27,
+    'bin_h' : 205}  
+
+bin_sizes = {'small':small_bin_size,
+             'large':large_bin_size}
 
 class Bin(ImgObj):
-    # TODO: figure out how to make it possible to train with more balls
-    bin_w_top = 140
-    bin_bottom_offset = round(.25*bin_w_top)
-    bin_h = 160
+    # TODO: expand more sizes or ways to let balls overlap
     sticky_width = 30
     sticky_height = 20
     sticky_offset = 10
@@ -322,11 +463,14 @@ class Bin(ImgObj):
                         'previous':bin_edge_color,
                         'focus':bin_edge_color}
     stroke_width_highlight = {'normal':1,
-                              'previoius':2,
+                              'previous':2,
                         'focus':4}
-    def __init__(self,color,left_x=0,top_y=0,contents=None,highlight='normal'):
-        # Define dimensions and central positions for bin components
-        
+    def __init__(self,color,left_x=0,top_y=0,contents=None,highlight='normal',
+                 bin_size = 'small'):
+        # set bin size
+        for dim, val in bin_sizes[bin_size].items():
+            setattr(self,dim,val)    
+
         self.highlight = highlight
         if isinstance(color,list):
             self.n_labels = len(color)
@@ -342,8 +486,8 @@ class Bin(ImgObj):
         
         self.location = Coordinate(left_x,top_y)
         self.placement_loc = self.location
-        self.base_points = PointList([(0,0), (Bin.bin_bottom_offset, Bin.bin_h), 
-                                 (Bin.bin_w_top-Bin.bin_bottom_offset, Bin.bin_h), (Bin.bin_w_top, 0)]) 
+        self.base_points = PointList([(0,0), (self.bin_bottom_offset, self.bin_h), 
+                                 (self.bin_w_top-self.bin_bottom_offset, self.bin_h), (self.bin_w_top, 0)]) 
         
 
         self.contents = []
@@ -355,7 +499,7 @@ class Bin(ImgObj):
                 self.contents.append(ball)
                 # self.add_ball(ball)
         
-    def get_anchor(self):
+    def get_anchor(self,type=None):
         return self.placement_loc + Coordinate(self.bin_w_top/2,0)
     
     def get_series(self):
@@ -390,7 +534,7 @@ class Bin(ImgObj):
                     stroke=self.stroke_color_highlight[highlight],
                     stroke_width=self.stroke_width_highlight[highlight])
         
-        # Todo: still needs to be expanded for multiple
+        
         sticky_loc = self.placement_loc + (Bin.sticky_offset,0)
         sticky = self.label.get_elements(sticky_loc)
         
@@ -404,24 +548,33 @@ class Bin(ImgObj):
         bin_points = self.base_points + self.placement_loc
         return bin_points.get_min_dims()
     
-    def sample(self):
-        return choice(self.contents).name
+    def sample(self,return_object=False):
+        '''
+        '''
+        if return_object:
+            return choice(self.contents)
+        else:
+            return choice(self.contents).name
         
 
     def add_ball(self,ball):
         # set ball's relative location only
+        if not isinstance(ball,Ball):
+            # if not a ball, create one
+            ball = Ball(ball)
         ball.set_location(self.coordinates[len(self.contents)])
         self.contents.append(ball)
+        
 
     
     def compute_coodinates(self):
-        width_diff = 2*Bin.bin_bottom_offset
-        center_min_width = Bin.bin_w_top -width_diff - 2*Bin.pad -2*Ball.radius
-        usable_min_width = Bin.bin_w_top -2*Bin.bin_bottom_offset - 2*Bin.pad
-        left_at_height = lambda y: y*Bin.bin_bottom_offset + Ball.radius + Bin.pad
+        width_diff = 2*self.bin_bottom_offset
+        center_min_width = self.bin_w_top -width_diff - 2*self.pad -2*Ball.radius
+        usable_min_width = self.bin_w_top -2*self.bin_bottom_offset - 2*self.pad
+        left_at_height = lambda y: y*self.bin_bottom_offset + Ball.radius + self.pad
         usable_width_at_height = lambda y: (1-y)*width_diff + usable_min_width
         center_width_at_height = lambda y: (1-y)*width_diff + center_min_width
-        usable_height = Bin.bin_h-(Bin.pad+Bin.sticky_height)
+        usable_height = self.bin_h-(self.pad+self.sticky_height)
         center_usable_height = usable_height-2*Ball.radius
         max_vert_balls = usable_height//(2*(Ball.radius+Ball.pad))
         # bias to bottom
@@ -437,14 +590,14 @@ class Bin(ImgObj):
     def __str__(self):
         return f"bin at {self.location}"
         
-    @staticmethod
-    def ball_loc_candidate(prev_placed):
+    # @staticmethod - unused
+    def ball_loc_candidate(self,prev_placed):
 
-        width_diff = 2*Bin.bin_bottom_offset
-        min_width = Bin.bin_w_top -2*Bin.bin_bottom_offset - 2*Bin.pad -Ball.radius
-        left_at_height = lambda y: y*Bin.bin_bottom_offset + Ball.radius + Bin.pad
+        width_diff = 2*self.bin_bottom_offset
+        min_width = self.bin_w_top -2*self.bin_bottom_offset - 2*Bin.pad -Ball.radius
+        left_at_height = lambda y: y*self.bin_bottom_offset + Ball.radius + Bin.pad
         width_at_height = lambda y: (1-y)*width_diff + min_width
-        usable_height = Bin.bin_h-(2*Ball.radius+Bin.pad+Bin.sticky_height)
+        usable_height = self.bin_h-(2*Ball.radius+Bin.pad+Bin.sticky_height)
         # random location within the height
         rel_y = random()
         candidate_y = rel_y*usable_height +Bin.pad + Ball.radius+Bin.sticky_height
@@ -455,6 +608,7 @@ class Bin(ImgObj):
         return Coordinate(round(candidate_x),round(candidate_y))
     
     @staticmethod
+    # not used
     def get_ball_loc_ordered(self,prev_placed):
         width_diff = 2*Bin.bin_bottom_offset
         center_min_width = Bin.bin_w_top -2*Bin.bin_bottom_offset - 2*Bin.pad -Ball.radius
@@ -480,7 +634,7 @@ class DocCollection(ImgObj):
                 self.doc_list.append(doc)
     
     def get_next_doc_loc(self):
-        # calculate, probably align vertically
+        # calculate, probably align vertically but with wrapping optionally
         return Coordinate(0,0)
 
 
@@ -488,7 +642,7 @@ class StickyContainer(ImgObj):
     sticky_width = 100
     sticky_height = 60
     def __init__(self, sticky_list,word_spacing=10,left =0,top=0,
-            max_width_words = None,end_token='#ffffff'):
+            max_width_words = None,end_token='#ffffff',context_len=1):
         '''
         '''
         # self.words = sticky_list 
@@ -497,6 +651,7 @@ class StickyContainer(ImgObj):
         self.word_spacing = word_spacing
         self.location = Coordinate(left,top)
         self.placement_loc = self.location
+        self.context_len = context_len
         if max_width_words:
             self.word_wrap = True
             self.words_per_row = max_width_words
@@ -508,9 +663,9 @@ class StickyContainer(ImgObj):
             self.add_word(cur_word)
     
     @classmethod
-    def from_list(cls,word_list,max_width_words=None):
+    def from_list(cls,word_list,max_width_words=None,context_len=1):
         sticky_list = [Sticky(word) for word in word_list]
-        return cls(sticky_list,max_width_words=max_width_words)
+        return cls(sticky_list,max_width_words=max_width_words,context_len=context_len)
     
     @classmethod
     def from_string(cls,doc_string,max_width_words=None):
@@ -531,6 +686,17 @@ class StickyContainer(ImgObj):
 
     def get_word(self,index):
         return self.words[index]
+    
+    def get_context(self,index):
+        # if -1 should return the last self.context_len words
+        # if positive shoudl return self.context_len words before the index including the index
+        if index < 0:  
+            return self.words[-self.context_len:]
+        else:
+            return self.words[index-self.context_len:index]
+    
+    def set_context(self,new_context_len):
+        self.context_len = new_context_len
     
     def get_elements(self,container_loc = Coordinate(0,0)):
         self.placement_loc = self.location + container_loc
@@ -582,6 +748,9 @@ class Doc(StickyContainer):
     sticky_width = 100
     sticky_height = 60
 
+class MiniDoc(StickyContainer):
+    sticky_width = 50
+    sticky_height = 30
 
 
 class Word:
@@ -611,8 +780,8 @@ class Sticky(ImgObj):
                         'previous':faded_edge_color,
                         'focus':bin_edge_color}
     stroke_width_highlight = {'normal':1, 
-                              'previous':4,
-                        'focus':4}
+                              'previous':5,
+                        'focus':5}
     default_shape = svg.Rect
     def __init__(self,color,left_x=0,top_y=0,width=Doc.sticky_width,height=Doc.sticky_height,
                  highlight='normal'):
@@ -625,8 +794,11 @@ class Sticky(ImgObj):
         self.placement_loc = self.location
         self.highlight = highlight
         
-    def get_anchor(self):        
-        return self.placement_loc + Coordinate(self.width/2,self.height)
+    def get_anchor(self,type=None):
+        if type == 'top':
+            return self.placement_loc + Coordinate(self.width/2,0)
+        elif type == 'bottom':        
+            return self.placement_loc + Coordinate(self.width/2,self.height)
     
     def set_focus(self):
         self.highlight = 'focus'
@@ -657,11 +829,9 @@ class Sticky(ImgObj):
         return [sticky] 
     
     def __str__(self):
-        
         return self.get_elements()[0].as_str()
 
 class Label(Sticky):
-    # TODO: implement label and use it for bins
     def __init__(self, color, left_x=0, top_y=0, width=Bin.sticky_width, height=Bin.sticky_height):
         super().__init__(color, left_x, top_y, width, height)
 
@@ -670,27 +840,36 @@ class LabelGroup(StickyContainer):
 
     sticky_width = Bin.sticky_width
     sticky_height = Bin.sticky_height
-    # TODO: implement labelgroup to hold two labls and allow for bins to be created for longer context windows
     def __init__(self, labels):
-        super().__init__(labels)
+        context_length = len(labels)
+        super().__init__(labels,context_len=context_length,
+                         max_width_words=context_length,)
 
 class Ball(ImgObj):
-    # TODO: implement ball highlights (follow  sticky and bin as examples)
     radius = 10
     pad = 2
-    def __init__(self,color,cx=radius,cy=radius):
+
+    
+    stroke_color_highlight = {'normal':"transparent",
+                        'previous':bin_edge_color,
+                        'focus':bin_edge_color}
+    stroke_width_highlight = {'normal':1,
+                              'previous':2,
+                        'focus':4}
+    def __init__(self,color,cx=radius,cy=radius,highlight='normal'):
         '''
         '''
         self.location = Coordinate(cx,cy)
         self.placement_loc = self.location
         self.color = resolve_color(color)
         self.name = color
+        self.highlight = highlight
         
     
     def adjust(self,rel_location):
         self.location +=rel_location
 
-    def get_anchor(self):
+    def get_anchor(self,type=None):
         
         return self.placement_loc + Coordinate(0,-self.radius)
        
@@ -699,7 +878,24 @@ class Ball(ImgObj):
         far_loc = self.location + Coordinate(Ball.radius,Ball.radius)
         return far_loc.get_xy()
     
-    def get_elements(self,container_loc=Coordinate(0,0)):
+
+    def set_focus(self):
+        self.highlight = 'focus'
+    
+    def set_previous(self):
+        self.highlight = 'previous'
+
+    def set_normal(self):
+        self.highlight = 'normal'
+
+    def set_highlight(self,new_highlight):
+        self.highlight = new_highlight
+
+    def get_elements(self,container_loc=Coordinate(0,0),highlight=None):
+        # if passed, use but do not set
+        if not(highlight):
+            highlight = self.highlight
+
         # relative move only on render
         self.placement_loc = self.location + container_loc       
         x,y = self.placement_loc.get_xy()
@@ -708,7 +904,8 @@ class Ball(ImgObj):
         ball = svg.Circle(
                 cx=x, cy=y, r=Ball.radius,
                 fill=self.color,
-                stroke="transparent",
+                stroke=self.stroke_color_highlight[highlight],
+                stroke_width=self.stroke_width_highlight[highlight]
             )
         
         return [ball]
